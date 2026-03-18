@@ -1,8 +1,18 @@
 # Configurações do projeto
 # ATENÇÃO: Não compartilhe este arquivo publicamente
 
+# Gmail
+GMAIL_USER = "seu-email@gmail.com"
+GMAIL_APP_PASSWORD = "sua-senha-de-app-aqui"
+
+# Anthropic
 ANTHROPIC_API_KEY = "sua-api-key-aqui"
 
-# Configurações do modelo
+# Modelo
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 1024
+
+# Agente
+INTERVALO_MINUTOS = 15
+ARQUIVO_SAIDA = "financeiro.md"
+LOG_FILE = "agente.log"

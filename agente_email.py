@@ -12,13 +12,17 @@ import logging
 import schedule
 from datetime import datetime
 from email.header import decode_header
-from dotenv import load_dotenv
 import anthropic
-
-load_dotenv()
-
-# Configuração de logging
-LOG_FILE = os.getenv("LOG_FILE", "agente.log")
+from config import (
+    GMAIL_USER,
+    GMAIL_APP_PASSWORD,
+    ANTHROPIC_API_KEY,
+    MODEL,
+    MAX_TOKENS,
+    INTERVALO_MINUTOS,
+    ARQUIVO_SAIDA,
+    LOG_FILE,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,17 +30,10 @@ logging.basicConfig(
     datefmt="%d/%m/%Y %H:%M:%S",
     handlers=[
         logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),  # também exibe no terminal
+        logging.StreamHandler(),
     ],
 )
 log = logging.getLogger(__name__)
-
-# Configurações
-GMAIL_USER = os.getenv("GMAIL_USER")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-INTERVALO_MINUTOS = int(os.getenv("INTERVALO_MINUTOS", "15"))
-ARQUIVO_SAIDA = os.getenv("ARQUIVO_SAIDA", "financeiro.md")
 ARQUIVO_IDS_PROCESSADOS = ".emails_processados.json"
 
 # Remetentes/assuntos financeiros a monitorar
@@ -130,8 +127,8 @@ Seja direto e objetivo. Se não houver informações financeiras relevantes, dig
 """
 
     response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=1024,
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text
