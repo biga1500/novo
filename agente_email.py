@@ -257,13 +257,17 @@ def _inferir_categoria(descricao: str, valor: float) -> str:
 
 def parsear_csv(conteudo: bytes, empresa: str) -> list[dict]:
     """
-    Suporta dois formatos Nubank:
-      Cartão  → Data, Descrição, Valor  (valor negativo = gasto)
-      Conta   → Data, Descrição, Valor  (mesma estrutura)
+    Suporta formatos com separador vírgula ou tabulação.
+    Colunas esperadas: Data, Valor, Descrição (+ Identificador opcional).
     Retorna lista de dicts prontos para salvar_na_base.
     """
     texto = conteudo.decode("utf-8", errors="ignore")
-    reader = csv.DictReader(io.StringIO(texto))
+
+    # Detecta delimitador: tab ou vírgula
+    primeira_linha = texto.split("\n")[0]
+    delimitador = "\t" if "\t" in primeira_linha else ","
+
+    reader = csv.DictReader(io.StringIO(texto), delimiter=delimitador)
 
     # Normaliza nomes de colunas (remove BOM, espaços, lowercase)
     def norm(s):
@@ -287,6 +291,12 @@ def parsear_csv(conteudo: bytes, empresa: str) -> list[dict]:
             row_norm.get("value") or "0"
         ).strip().replace(",", ".")
 
+        # Identificador UUID (campo do extrato Nomad/Nubank) — usado como hash único
+        identificador = (
+            row_norm.get("identificador") or row_norm.get("id") or
+            row_norm.get("fitid") or ""
+        ).strip()
+
         if not data_str or not desc:
             continue
 
@@ -305,7 +315,8 @@ def parsear_csv(conteudo: bytes, empresa: str) -> list[dict]:
                 pass
         data_iso = dt.strftime("%Y-%m-%d") if dt else data_str
 
-        hash_id = _hash_transacao(data_iso, str(valor), desc)
+        # Prefere UUID do extrato como hash; fallback para MD5
+        hash_id = identificador if identificador else _hash_transacao(data_iso, str(valor), desc)
         if _transacao_ja_existe(hash_id):
             log.debug("Transação já existe (CSV), ignorando: %s %s", data_iso, desc)
             continue
