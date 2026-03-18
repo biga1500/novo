@@ -1,0 +1,5 @@
+.env
+.emails_processados.json
+financeiro.md
+__pycache__/
+*.pyc
