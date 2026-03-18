@@ -39,6 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 ARQUIVO_IDS_PROCESSADOS = ".emails_processados.json"
+ARQUIVO_ESTADO = ".agente_estado.json"
 
 # Remetentes/assuntos financeiros a monitorar
 FILTROS_FINANCEIROS = {
@@ -65,6 +66,20 @@ def salvar_id_processado(email_id: str):
     ids.add(email_id)
     with open(ARQUIVO_IDS_PROCESSADOS, "w") as f:
         json.dump(list(ids), f)
+
+
+def carregar_ultima_execucao() -> str:
+    """Retorna a data da última execução no formato IMAP (dd-Mon-yyyy)."""
+    if os.path.exists(ARQUIVO_ESTADO):
+        with open(ARQUIVO_ESTADO, "r") as f:
+            estado = json.load(f)
+            return estado.get("ultima_execucao")
+    return None
+
+
+def salvar_ultima_execucao():
+    with open(ARQUIVO_ESTADO, "w") as f:
+        json.dump({"ultima_execucao": datetime.now().strftime("%d-%b-%Y")}, f)
 
 
 # ─── Base de conhecimento financeiro ────────────────────────────────────────
@@ -270,10 +285,17 @@ def buscar_emails_financeiros():
         mail.select("inbox")
         log.info("Conectado com sucesso")
 
-        desde = (datetime.now() - timedelta(days=DIAS_ATRAS)).strftime("%d-%b-%Y")
+        ultima = carregar_ultima_execucao()
+        if ultima:
+            desde = ultima
+            log.info("Buscando emails desde última execução: %s", desde)
+        else:
+            desde = (datetime.now() - timedelta(days=DIAS_ATRAS)).strftime("%d-%b-%Y")
+            log.info("Primeira execução — buscando últimos %d dias", DIAS_ATRAS)
+
         _, mensagens = mail.search(None, f'SINCE "{desde}"')
         todos_ids = mensagens[0].split()
-        log.info("%d emails nos últimos %d dias", len(todos_ids), DIAS_ATRAS)
+        log.info("%d emails encontrados desde %s", len(todos_ids), desde)
 
         for email_id in reversed(todos_ids):
             email_id_str = email_id.decode()
@@ -321,6 +343,7 @@ def buscar_emails_financeiros():
 
                 time.sleep(1)
 
+        salvar_ultima_execucao()
         mail.logout()
         log.info("Desconectado do Gmail")
 
