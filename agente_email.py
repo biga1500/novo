@@ -820,8 +820,14 @@ def _salvar_paychecks(paychecks: list):
 
 
 def _detectar_paycheck(assunto: str, corpo: str) -> bool:
-    texto = (assunto + " " + corpo).lower()
-    return "paycheck received" in texto or "you've been paid" in texto or "you have been paid" in texto
+    # Normaliza apóstrofos smart quote (') para ASCII (') antes de comparar
+    texto = (assunto + " " + corpo).lower().replace("\u2019", "'").replace("\u2018", "'")
+    return (
+        "paycheck received" in texto
+        or "you've been paid" in texto
+        or "you have been paid" in texto
+        or "you\u2019ve been paid" in texto  # fallback caso não normalize
+    )
 
 
 def registrar_paycheck(empresa: str, data_email: str, id_email: str):

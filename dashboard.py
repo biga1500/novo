@@ -57,12 +57,13 @@ def index():
 def api_resumo():
     base = carregar_base()
 
-    total_entradas = 0.0
+    total_entradas_brl = 0.0
+    total_entradas_usd = 0.0
     total_saidas = 0.0
-    por_empresa: dict[str, float] = defaultdict(float)
+    por_empresa: dict[str, float] = defaultdict(float)      # só entradas
+    por_empresa_moeda: dict[str, str] = {}                   # moeda predominante por empresa
     por_categoria: dict[str, float] = defaultdict(float)
     por_mes: dict[str, float] = defaultdict(float)
-    por_moeda: dict[str, float] = defaultdict(float)
     transacoes = []
 
     # Investimentos
@@ -73,13 +74,14 @@ def api_resumo():
     operacoes_acoes = []
 
     TIPOS_ACOES = {"compra_ação", "compra_acao", "venda_ação", "venda_acao"}
+    CATS_ENTRADA = {"salário", "freelance", "cashback"}
 
     for t in base:
         valor = to_float(t.get("valor"))
         tipo = t.get("tipo", "").lower()
         empresa = t.get("empresa", "desconhecida").upper()
         categoria = t.get("categoria", "outro")
-        moeda = t.get("moeda") or "BRL"
+        moeda = (t.get("moeda") or "BRL").upper()
         dt = parse_data(t.get("data", ""))
         mes = dt.strftime("%Y-%m") if dt else "desconhecido"
         data_fmt = dt.strftime("%d/%m/%Y") if dt else t.get("data", "?")
@@ -89,7 +91,7 @@ def api_resumo():
             if ultimo_snapshot_dt is None or (dt and dt > ultimo_snapshot_dt):
                 ultimo_snapshot = valor
                 ultimo_snapshot_dt = dt
-            continue  # não entra nas stats gerais
+            continue
 
         # ── operações de ações ─────────────────────────────────────────
         if tipo in TIPOS_ACOES or categoria == "ação":
@@ -107,19 +109,25 @@ def api_resumo():
                 "moeda": moeda,
                 "descricao": t.get("descricao", ""),
             })
-            continue  # não entra nas stats gerais
+            continue
 
         # ── transações normais ─────────────────────────────────────────
-        if tipo == "entrada" or categoria in ("salário", "freelance", "cashback"):
-            total_entradas += valor
-        elif tipo in ("saída", "pagamento", "fatura", "transferência"):
-            total_saidas += valor
+        is_entrada = tipo == "entrada" or categoria in CATS_ENTRADA
+        is_saida = tipo in ("saída", "saida", "pagamento", "fatura", "transferência", "transferencia")
 
-        if valor > 0:
+        if is_entrada and valor > 0:
+            if moeda == "USD":
+                total_entradas_usd += valor
+            else:
+                total_entradas_brl += valor
+            # por_empresa e por_mes só contam entradas
             por_empresa[empresa] += valor
-            por_categoria[categoria] += valor
+            por_empresa_moeda.setdefault(empresa, moeda)
             por_mes[mes] += valor
-            por_moeda[moeda] += valor
+            por_categoria[categoria] += valor
+        elif is_saida and valor > 0:
+            total_saidas += valor
+            por_categoria[categoria] += valor
 
         transacoes.append({
             "data": data_fmt,
@@ -146,13 +154,14 @@ def api_resumo():
 
     return jsonify({
         "total_transacoes": len(base),
-        "total_entradas": round(total_entradas, 2),
+        "total_entradas_brl": round(total_entradas_brl, 2),
+        "total_entradas_usd": round(total_entradas_usd, 2),
         "total_saidas": round(total_saidas, 2),
-        "saldo": round(total_entradas - total_saidas, 2),
+        "saldo_brl": round(total_entradas_brl - total_saidas, 2),
         "por_empresa": dict(por_empresa),
+        "por_empresa_moeda": por_empresa_moeda,
         "por_categoria": dict(por_categoria),
         "por_mes": meses_sorted,
-        "por_moeda": dict(por_moeda),
         "transacoes": transacoes_sorted,
         "investimentos": {
             "total_comprado": round(total_comprado, 2),

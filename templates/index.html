@@ -204,24 +204,28 @@
         <!-- Cards -->
         <div class="cards">
           <div class="card verde">
-            <div class="label">Total Entradas</div>
-            <div class="value" id="c-entradas">—</div>
+            <div class="label">Entradas BRL</div>
+            <div class="value" id="c-entradas-brl">—</div>
+          </div>
+          <div class="card verde" style="border-color:#166534">
+            <div class="label">Entradas USD (Deel / OnTop)</div>
+            <div class="value" id="c-entradas-usd" style="color:#86efac">—</div>
           </div>
           <div class="card vermelho">
             <div class="label">Total Saídas</div>
             <div class="value" id="c-saidas">—</div>
           </div>
           <div class="card azul">
-            <div class="label">Saldo</div>
+            <div class="label">Saldo BRL</div>
             <div class="value" id="c-saldo">—</div>
           </div>
           <div class="card amarelo">
             <div class="label">Em Investimentos</div>
             <div class="value" id="c-invest">—</div>
           </div>
-          <div class="card amarelo" style="border-color:#334155">
+          <div class="card" style="border-color:#334155">
             <div class="label">Transações</div>
-            <div class="value" id="c-total">—</div>
+            <div class="value" id="c-total" style="color:#94a3b8">—</div>
           </div>
         </div>
 
@@ -387,11 +391,13 @@
       document.getElementById('conteudo').style.display = 'block';
 
       // Cards gerais
-      document.getElementById('c-entradas').textContent = fmt(d.total_entradas);
-      document.getElementById('c-saidas').textContent   = fmt(d.total_saidas);
+      document.getElementById('c-entradas-brl').textContent = fmt(d.total_entradas_brl);
+      document.getElementById('c-entradas-usd').textContent = d.total_entradas_usd > 0
+        ? fmt(d.total_entradas_usd, 'USD') : '—';
+      document.getElementById('c-saidas').textContent = fmt(d.total_saidas);
       const saldoEl = document.getElementById('c-saldo');
-      saldoEl.textContent = fmt(d.saldo);
-      saldoEl.style.color = d.saldo >= 0 ? '#4ade80' : '#f87171';
+      saldoEl.textContent = fmt(d.saldo_brl);
+      saldoEl.style.color = d.saldo_brl >= 0 ? '#4ade80' : '#f87171';
       document.getElementById('c-total').textContent = d.total_transacoes;
 
       // Card investimentos (usa snapshot se disponível, senão saldo líquido)
@@ -456,12 +462,15 @@
         }
       }
 
-      // Gráfico: por empresa (bar)
-      const empLabels = Object.keys(d.por_empresa);
+      // Gráfico: por empresa (bar) — só entradas, moeda indicada no label
+      const empMoeda = d.por_empresa_moeda || {};
+      const empLabels = Object.keys(d.por_empresa).map(e =>
+        empMoeda[e] && empMoeda[e] !== 'BRL' ? `${e} (${empMoeda[e]})` : e
+      );
       criarOuAtualizar('g-empresa', 'bar', {
         labels: empLabels,
         datasets: [{
-          label: 'Valor (R$)',
+          label: 'Entradas por empresa',
           data: Object.values(d.por_empresa),
           backgroundColor: CORES.slice(0, empLabels.length),
           borderRadius: 6,
