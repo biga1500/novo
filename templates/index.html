@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Financeiro</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      padding: 24px 32px;
+      border-bottom: 1px solid #1e2535;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; }
+    header span { font-size: 0.85rem; color: #64748b; }
+
+    #atualizar {
+      background: #1e40af;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    #atualizar:hover { background: #2563eb; }
+
+    main { padding: 24px 32px; display: flex; flex-direction: column; gap: 24px; }
+
+    /* Cards de resumo */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #1a1f2e;
+      border: 1px solid #1e2535;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+    .card .value { font-size: 1.6rem; font-weight: 700; }
+    .card.verde .value { color: #4ade80; }
+    .card.vermelho .value { color: #f87171; }
+    .card.azul .value { color: #60a5fa; }
+    .card.amarelo .value { color: #fbbf24; }
+
+    /* Grid de gráficos */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 20px;
+    }
+    .chart-box {
+      background: #1a1f2e;
+      border: 1px solid #1e2535;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .chart-box h2 { font-size: 0.9rem; color: #94a3b8; margin-bottom: 16px; font-weight: 500; }
+    .chart-box canvas { max-height: 260px; }
+
+    /* Tabela */
+    .tabela-box {
+      background: #1a1f2e;
+      border: 1px solid #1e2535;
+      border-radius: 12px;
+      padding: 20px;
+      overflow-x: auto;
+    }
+    .tabela-box h2 { font-size: 0.9rem; color: #94a3b8; margin-bottom: 16px; font-weight: 500; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 10px 12px; color: #64748b; border-bottom: 1px solid #1e2535; font-weight: 500; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1a2030; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1e2535; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .badge-entrada  { background: #14532d; color: #4ade80; }
+    .badge-saida    { background: #450a0a; color: #f87171; }
+    .badge-fatura   { background: #451a03; color: #fb923c; }
+    .badge-extrato  { background: #1e1b4b; color: #a5b4fc; }
+    .badge-notif    { background: #1e293b; color: #94a3b8; }
+    .badge-transf   { background: #0c4a6e; color: #7dd3fc; }
+    .badge-default  { background: #1e293b; color: #94a3b8; }
+
+    .empresa { font-weight: 600; font-size: 0.8rem; }
+    .valor-pos { color: #4ade80; font-weight: 600; }
+    .valor-neg { color: #f87171; font-weight: 600; }
+    .descricao { color: #94a3b8; font-size: 0.8rem; max-width: 320px; }
+
+    #sem-dados {
+      display: none;
+      text-align: center;
+      padding: 60px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Dashboard Financeiro</h1>
+    <div style="display:flex;gap:12px;align-items:center">
+      <span id="ultima-atualizacao">—</span>
+      <button id="atualizar" onclick="carregar()">Atualizar</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="sem-dados">
+      <p style="font-size:1.1rem">Nenhuma transação encontrada.</p>
+      <p style="margin-top:8px;font-size:0.85rem">Execute o agente de email para popular a base.</p>
+    </div>
+
+    <div id="conteudo">
+      <!-- Cards -->
+      <div class="cards">
+        <div class="card verde">
+          <div class="label">Total Entradas</div>
+          <div class="value" id="c-entradas">—</div>
+        </div>
+        <div class="card vermelho">
+          <div class="label">Total Saídas</div>
+          <div class="value" id="c-saidas">—</div>
+        </div>
+        <div class="card azul">
+          <div class="label">Saldo</div>
+          <div class="value" id="c-saldo">—</div>
+        </div>
+        <div class="card amarelo">
+          <div class="label">Transações</div>
+          <div class="value" id="c-total">—</div>
+        </div>
+      </div>
+
+      <!-- Gráficos -->
+      <div class="charts-grid">
+        <div class="chart-box">
+          <h2>Valores por Empresa</h2>
+          <canvas id="g-empresa"></canvas>
+        </div>
+        <div class="chart-box">
+          <h2>Distribuição por Categoria</h2>
+          <canvas id="g-categoria"></canvas>
+        </div>
+        <div class="chart-box" style="grid-column: 1 / -1">
+          <h2>Evolução Mensal</h2>
+          <canvas id="g-mensal"></canvas>
+        </div>
+      </div>
+
+      <!-- Tabela -->
+      <div class="tabela-box">
+        <h2>Transações Recentes</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Empresa</th>
+              <th>Tipo</th>
+              <th>Categoria</th>
+              <th>Valor</th>
+              <th>Descrição</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const CORES = [
+      '#60a5fa','#4ade80','#f87171','#fbbf24','#a78bfa',
+      '#34d399','#fb923c','#e879f9','#38bdf8','#a3e635'
+    ];
+
+    let charts = {};
+
+    function fmt(val, moeda = 'BRL') {
+      if (!val) return '—';
+      try {
+        return new Intl.NumberFormat('pt-BR', {
+          style: 'currency', currency: moeda, minimumFractionDigits: 2
+        }).format(val);
+      } catch {
+        return `${moeda} ${val.toFixed(2)}`;
+      }
+    }
+
+    function badgeClass(tipo) {
+      const m = {
+        'entrada': 'badge-entrada',
+        'saída': 'badge-saida', 'saida': 'badge-saida',
+        'fatura': 'badge-fatura',
+        'extrato': 'badge-extrato',
+        'notificação': 'badge-notif', 'notificacao': 'badge-notif',
+        'transferência': 'badge-transf', 'transferencia': 'badge-transf',
+      };
+      return m[tipo?.toLowerCase()] || 'badge-default';
+    }
+
+    function criarOuAtualizar(id, tipo, data, opcoes = {}) {
+      if (charts[id]) charts[id].destroy();
+      const ctx = document.getElementById(id).getContext('2d');
+      charts[id] = new Chart(ctx, {
+        type: tipo,
+        data: data,
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: '#94a3b8', font: { size: 12 } } } },
+          ...opcoes
+        }
+      });
+    }
+
+    async function carregar() {
+      const resp = await fetch('/api/resumo');
+      const d = await resp.json();
+
+      document.getElementById('ultima-atualizacao').textContent =
+        'Atualizado às ' + new Date().toLocaleTimeString('pt-BR');
+
+      if (d.total_transacoes === 0) {
+        document.getElementById('sem-dados').style.display = 'block';
+        document.getElementById('conteudo').style.display = 'none';
+        return;
+      }
+
+      document.getElementById('sem-dados').style.display = 'none';
+      document.getElementById('conteudo').style.display = 'block';
+
+      // Cards
+      document.getElementById('c-entradas').textContent = fmt(d.total_entradas);
+      document.getElementById('c-saidas').textContent   = fmt(d.total_saidas);
+      const saldoEl = document.getElementById('c-saldo');
+      saldoEl.textContent = fmt(d.saldo);
+      saldoEl.style.color = d.saldo >= 0 ? '#4ade80' : '#f87171';
+      document.getElementById('c-total').textContent = d.total_transacoes;
+
+      // Gráfico: por empresa (bar)
+      const empLabels = Object.keys(d.por_empresa);
+      criarOuAtualizar('g-empresa', 'bar', {
+        labels: empLabels,
+        datasets: [{
+          label: 'Valor (R$)',
+          data: Object.values(d.por_empresa),
+          backgroundColor: CORES.slice(0, empLabels.length),
+          borderRadius: 6,
+        }]
+      }, {
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e2535' } },
+          y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e2535' } }
+        }
+      });
+
+      // Gráfico: por categoria (doughnut)
+      const catLabels = Object.keys(d.por_categoria);
+      criarOuAtualizar('g-categoria', 'doughnut', {
+        labels: catLabels,
+        datasets: [{
+          data: Object.values(d.por_categoria),
+          backgroundColor: CORES.slice(0, catLabels.length),
+          borderWidth: 0,
+        }]
+      }, { cutout: '60%' });
+
+      // Gráfico: mensal (line)
+      const meses = Object.keys(d.por_mes);
+      const mesesFmt = meses.map(m => {
+        const [y, mo] = m.split('-');
+        return new Date(+y, +mo - 1).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+      });
+      criarOuAtualizar('g-mensal', 'line', {
+        labels: mesesFmt,
+        datasets: [{
+          label: 'Volume financeiro',
+          data: Object.values(d.por_mes),
+          borderColor: '#60a5fa',
+          backgroundColor: 'rgba(96,165,250,0.15)',
+          fill: true,
+          tension: 0.4,
+          pointBackgroundColor: '#60a5fa',
+        }]
+      }, {
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e2535' } },
+          y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e2535' } }
+        }
+      });
+
+      // Tabela
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      for (const t of d.transacoes) {
+        const tr = document.createElement('tr');
+        const isPos = t.tipo === 'entrada' ||
+          ['salário','freelance','cashback'].includes(t.categoria);
+        tr.innerHTML = `
+          <td>${t.data}</td>
+          <td><span class="empresa">${t.empresa}</span></td>
+          <td><span class="badge ${badgeClass(t.tipo)}">${t.tipo || '?'}</span></td>
+          <td>${t.categoria || '?'}</td>
+          <td class="${t.valor > 0 ? (isPos ? 'valor-pos' : 'valor-neg') : ''}">
+            ${t.valor > 0 ? fmt(t.valor, t.moeda) : '—'}
+          </td>
+          <td class="descricao">${t.descricao || '—'}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    carregar();
+  </script>
+</body>
+</html>
