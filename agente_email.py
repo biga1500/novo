@@ -10,7 +10,7 @@ import json
 import time
 import logging
 import schedule
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.header import decode_header
 import anthropic
 from config import (
@@ -20,6 +20,7 @@ from config import (
     MODEL,
     MAX_TOKENS,
     INTERVALO_MINUTOS,
+    DIAS_ATRAS,
     ARQUIVO_SAIDA,
     LOG_FILE,
 )
@@ -174,11 +175,12 @@ def buscar_emails_financeiros():
         mail.select("inbox")
         log.info("Conectado com sucesso")
 
-        _, mensagens = mail.search(None, "ALL")
+        desde = (datetime.now() - timedelta(days=DIAS_ATRAS)).strftime("%d-%b-%Y")
+        _, mensagens = mail.search(None, f'SINCE "{desde}"')
         todos_ids = mensagens[0].split()
-        log.info("%d emails na caixa de entrada (verificando os 200 mais recentes)", len(todos_ids))
+        log.info("%d emails nos últimos %d dias", len(todos_ids), DIAS_ATRAS)
 
-        for email_id in reversed(todos_ids[-200:]):
+        for email_id in reversed(todos_ids):
             email_id_str = email_id.decode()
 
             if email_id_str in ids_processados:

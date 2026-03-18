@@ -14,5 +14,6 @@ MAX_TOKENS = 1024
 
 # Agente
 INTERVALO_MINUTOS = 15
+DIAS_ATRAS = 7  # buscar emails dos últimos N dias
 ARQUIVO_SAIDA = "financeiro.md"
 LOG_FILE = "agente.log"
