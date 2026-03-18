@@ -6,9 +6,13 @@ Mantém uma base de conhecimento financeiro com histórico de transações.
 
 import imaplib
 imaplib._MAXLINE = 300_000_000  # aumenta limite para 300MB
+import csv
 import email
+import hashlib
+import io
 import os
 import json
+import re
 import time
 import logging
 import schedule
@@ -164,6 +168,242 @@ def identificar_remetente(remetente: str, assunto: str) -> str | None:
     return None
 
 
+# ─── Anexos / Extratos ──────────────────────────────────────────────────────
+
+def extrair_anexos(msg) -> list[dict]:
+    """
+    Percorre as partes do email e retorna uma lista de anexos CSV/OFX encontrados.
+    Cada item: {"nome": str, "tipo": "csv"|"ofx", "conteudo": bytes}
+    """
+    anexos = []
+    for parte in msg.walk():
+        content_disposition = parte.get("Content-Disposition", "")
+        if "attachment" not in content_disposition.lower():
+            continue
+        nome_raw = parte.get_filename() or ""
+        nome = decodificar_header(nome_raw).strip()
+        nome_lower = nome.lower()
+        if nome_lower.endswith(".csv"):
+            tipo = "csv"
+        elif nome_lower.endswith(".ofx") or nome_lower.endswith(".qfx"):
+            tipo = "ofx"
+        else:
+            continue
+        conteudo = parte.get_payload(decode=True)
+        if conteudo:
+            anexos.append({"nome": nome, "tipo": tipo, "conteudo": conteudo})
+            log.info("Anexo encontrado: %s (%s)", nome, tipo.upper())
+    return anexos
+
+
+def _hash_transacao(data: str, valor: str, descricao: str) -> str:
+    chave = f"{data}|{valor}|{descricao}".lower().strip()
+    return hashlib.md5(chave.encode()).hexdigest()
+
+
+def _transacao_ja_existe(hash_id: str) -> bool:
+    base = carregar_base()
+    return any(t.get("hash_extrato") == hash_id for t in base)
+
+
+def _inferir_categoria(descricao: str, valor: float) -> str:
+    desc = descricao.lower()
+    if any(p in desc for p in ["salário", "salario", "pagamento recebido", "crédito em conta"]):
+        return "salário"
+    if any(p in desc for p in ["freelance", "transferência recebida", "pix recebido"]):
+        return "freelance"
+    if any(p in desc for p in ["fatura", "pagamento fatura"]):
+        return "fatura"
+    if any(p in desc for p in ["pix enviado", "transferência enviada", "ted", "doc"]):
+        return "transferência"
+    if any(p in desc for p in ["cashback", "rewards"]):
+        return "cashback"
+    if any(p in desc for p in ["invest", "rdb", "cdb", "lci", "lca"]):
+        return "investimento"
+    return "pagamento" if valor < 0 else "outro"
+
+
+# ── Parser CSV (Nubank e formato genérico) ───────────────────────────────────
+
+def parsear_csv(conteudo: bytes, empresa: str) -> list[dict]:
+    """
+    Suporta dois formatos Nubank:
+      Cartão  → Data, Descrição, Valor  (valor negativo = gasto)
+      Conta   → Data, Descrição, Valor  (mesma estrutura)
+    Retorna lista de dicts prontos para salvar_na_base.
+    """
+    texto = conteudo.decode("utf-8", errors="ignore")
+    reader = csv.DictReader(io.StringIO(texto))
+
+    # Normaliza nomes de colunas (remove BOM, espaços, lowercase)
+    def norm(s):
+        return s.strip().lstrip("\ufeff").lower()
+
+    transacoes = []
+    for row in reader:
+        row_norm = {norm(k): v.strip() for k, v in row.items() if k}
+
+        # Tenta mapear colunas em português e inglês
+        data_str = (
+            row_norm.get("data") or row_norm.get("date") or
+            row_norm.get("dt lancto") or ""
+        ).strip()
+        desc = (
+            row_norm.get("descrição") or row_norm.get("descricao") or
+            row_norm.get("description") or row_norm.get("memo") or ""
+        ).strip()
+        valor_str = (
+            row_norm.get("valor") or row_norm.get("amount") or
+            row_norm.get("value") or "0"
+        ).strip().replace(",", ".")
+
+        if not data_str or not desc:
+            continue
+
+        try:
+            valor = float(valor_str)
+        except ValueError:
+            valor = 0.0
+
+        # Tenta parsear a data em vários formatos
+        dt = None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+            try:
+                dt = datetime.strptime(data_str, fmt)
+                break
+            except ValueError:
+                pass
+        data_iso = dt.strftime("%Y-%m-%d") if dt else data_str
+
+        hash_id = _hash_transacao(data_iso, str(valor), desc)
+        if _transacao_ja_existe(hash_id):
+            log.debug("Transação já existe (CSV), ignorando: %s %s", data_iso, desc)
+            continue
+
+        tipo = "entrada" if valor > 0 else "saída"
+        categoria = _inferir_categoria(desc, valor)
+        origem = empresa if valor < 0 else desc
+        destino = desc if valor < 0 else empresa
+
+        transacoes.append({
+            "hash_extrato": hash_id,
+            "data": data_iso,
+            "empresa": empresa,
+            "remetente": f"extrato@{empresa}.com.br",
+            "assunto": f"Extrato {empresa.upper()} importado via CSV",
+            "tipo": tipo,
+            "valor": str(abs(valor)),
+            "moeda": "BRL",
+            "origem": origem,
+            "destino": destino,
+            "categoria": categoria,
+            "descricao": desc,
+            "observacoes": f"Importado de arquivo CSV — {data_iso}",
+            "resumo_markdown": f"**{desc}** — {tipo} de R$ {abs(valor):.2f} em {data_iso}",
+            "fonte": "extrato_csv",
+        })
+
+    return transacoes
+
+
+# ── Parser OFX ───────────────────────────────────────────────────────────────
+
+def parsear_ofx(conteudo: bytes, empresa: str) -> list[dict]:
+    """
+    Parser para OFX/QFX (SGML ou XML).
+    Extrai blocos <STMTTRN>...</STMTTRN>.
+    """
+    texto = conteudo.decode("utf-8", errors="ignore")
+
+    # Captura todos os blocos de transação
+    blocos = re.findall(r"<STMTTRN>(.*?)</STMTTRN>", texto, re.DOTALL | re.IGNORECASE)
+
+    def get_tag(bloco, tag):
+        m = re.search(rf"<{tag}>\s*([^\r\n<]+)", bloco, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    transacoes = []
+    for bloco in blocos:
+        fitid  = get_tag(bloco, "FITID")
+        dtpost = get_tag(bloco, "DTPOSTED")
+        amount = get_tag(bloco, "TRNAMT")
+        memo   = get_tag(bloco, "MEMO") or get_tag(bloco, "NAME")
+
+        if not amount:
+            continue
+
+        # Formata data: 20240115120000[-3:BRT] → 2024-01-15
+        data_iso = dtpost[:8]
+        if len(data_iso) == 8 and data_iso.isdigit():
+            data_iso = f"{data_iso[:4]}-{data_iso[4:6]}-{data_iso[6:8]}"
+
+        try:
+            valor = float(amount.replace(",", "."))
+        except ValueError:
+            valor = 0.0
+
+        hash_id = fitid if fitid else _hash_transacao(data_iso, str(valor), memo)
+        if _transacao_ja_existe(hash_id):
+            log.debug("Transação já existe (OFX), ignorando: %s %s", data_iso, memo)
+            continue
+
+        tipo = "entrada" if valor > 0 else "saída"
+        categoria = _inferir_categoria(memo, valor)
+        origem = empresa if valor < 0 else memo
+        destino = memo if valor < 0 else empresa
+
+        transacoes.append({
+            "hash_extrato": hash_id,
+            "data": data_iso,
+            "empresa": empresa,
+            "remetente": f"extrato@{empresa}.com.br",
+            "assunto": f"Extrato {empresa.upper()} importado via OFX",
+            "tipo": tipo,
+            "valor": str(abs(valor)),
+            "moeda": "BRL",
+            "origem": origem,
+            "destino": destino,
+            "categoria": categoria,
+            "descricao": memo,
+            "observacoes": f"Importado de arquivo OFX — {data_iso}",
+            "resumo_markdown": f"**{memo}** — {tipo} de R$ {abs(valor):.2f} em {data_iso}",
+            "fonte": "extrato_ofx",
+        })
+
+    return transacoes
+
+
+def processar_anexos_extrato(msg, empresa: str, data_email: str) -> int:
+    """
+    Extrai anexos CSV/OFX do email, parseia e importa na base.
+    Retorna o número de transações importadas.
+    """
+    anexos = extrair_anexos(msg)
+    if not anexos:
+        return 0
+
+    total = 0
+    for anexo in anexos:
+        log.info("Processando anexo: %s", anexo["nome"])
+        if anexo["tipo"] == "csv":
+            transacoes = parsear_csv(anexo["conteudo"], empresa)
+        else:
+            transacoes = parsear_ofx(anexo["conteudo"], empresa)
+
+        for t in transacoes:
+            salvar_na_base(t)
+            salvar_no_arquivo(
+                empresa, t["remetente"], t["assunto"], t["data"], t
+            )
+            total += 1
+
+        log.info(
+            "%d transação(ões) importada(s) de %s", len(transacoes), anexo["nome"]
+        )
+
+    return total
+
+
 # ─── Claude ─────────────────────────────────────────────────────────────────
 
 def interpretar_com_claude(remetente: str, assunto: str, corpo: str, empresa: str, data_email: str) -> dict:
@@ -316,32 +556,41 @@ def buscar_emails_financeiros():
                 emails_encontrados += 1
                 log.info("Email financeiro encontrado: [%s] %s", empresa.upper(), assunto[:60])
 
-                corpo = extrair_corpo(msg)
-                log.info("Corpo extraído (%d caracteres). Enviando para Claude...", len(corpo))
+                # 1) Tenta importar anexos CSV/OFX — prioridade sobre interpretação do corpo
+                n_importadas = processar_anexos_extrato(msg, empresa, data_email)
 
-                dados = interpretar_com_claude(remetente, assunto, corpo, empresa, data_email)
-                log.info(
-                    "Interpretado: %s | %s %s | %s → %s",
-                    dados.get("tipo"), dados.get("valor"), dados.get("moeda"),
-                    dados.get("origem"), dados.get("destino"),
-                )
+                if n_importadas > 0:
+                    log.info(
+                        "%d transação(ões) importada(s) do extrato anexo em [%s]",
+                        n_importadas, empresa.upper(),
+                    )
+                else:
+                    # 2) Sem anexo: interpreta o corpo do email com Claude
+                    corpo = extrair_corpo(msg)
+                    log.info("Corpo extraído (%d caracteres). Enviando para Claude...", len(corpo))
 
-                # Salva na base de conhecimento
-                transacao = {
-                    "id_email": email_id_str,
-                    "data": data_email,
-                    "empresa": empresa,
-                    "remetente": remetente,
-                    "assunto": assunto,
-                    **dados,
-                }
-                salvar_na_base(transacao)
+                    dados = interpretar_com_claude(remetente, assunto, corpo, empresa, data_email)
+                    log.info(
+                        "Interpretado: %s | %s %s | %s → %s",
+                        dados.get("tipo"), dados.get("valor"), dados.get("moeda"),
+                        dados.get("origem"), dados.get("destino"),
+                    )
 
-                salvar_no_arquivo(empresa, remetente, assunto, data_email, dados)
+                    transacao = {
+                        "id_email": email_id_str,
+                        "data": data_email,
+                        "empresa": empresa,
+                        "remetente": remetente,
+                        "assunto": assunto,
+                        "fonte": "email_corpo",
+                        **dados,
+                    }
+                    salvar_na_base(transacao)
+                    salvar_no_arquivo(empresa, remetente, assunto, data_email, dados)
+                    time.sleep(1)
+
                 salvar_id_processado(email_id_str)
                 emails_processados += 1
-
-                time.sleep(1)
 
         salvar_ultima_execucao()
         mail.logout()
