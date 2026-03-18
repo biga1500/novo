@@ -1,5 +1,6 @@
 .env
 .emails_processados.json
 financeiro.md
+agente.log
 __pycache__/
 *.pyc

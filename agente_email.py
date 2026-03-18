@@ -8,6 +8,7 @@ import email
 import os
 import json
 import time
+import logging
 import schedule
 from datetime import datetime
 from email.header import decode_header
@@ -15,6 +16,20 @@ from dotenv import load_dotenv
 import anthropic
 
 load_dotenv()
+
+# Configuração de logging
+LOG_FILE = os.getenv("LOG_FILE", "agente.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%d/%m/%Y %H:%M:%S",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(),  # também exibe no terminal
+    ],
+)
+log = logging.getLogger(__name__)
 
 # Configurações
 GMAIL_USER = os.getenv("GMAIL_USER")
@@ -138,7 +153,7 @@ def salvar_no_arquivo(empresa: str, remetente: str, assunto: str, data: str, int
     with open(ARQUIVO_SAIDA, "a", encoding="utf-8") as f:
         f.write(entrada)
 
-    print(f"  ✓ Salvo no arquivo: {empresa.upper()} — {assunto[:50]}")
+    log.info("Salvo no arquivo: [%s] %s", empresa.upper(), assunto[:50])
 
 
 def conectar_gmail():
@@ -154,19 +169,19 @@ def buscar_emails_financeiros():
     emails_encontrados = 0
     emails_processados = 0
 
-    print(f"\n[{datetime.now().strftime('%d/%m/%Y %H:%M')}] Verificando emails...")
+    log.info("--- Iniciando verificação de emails ---")
 
     try:
+        log.info("Conectando ao Gmail...")
         mail = conectar_gmail()
         mail.select("inbox")
+        log.info("Conectado com sucesso")
 
-        # Busca emails dos últimos 30 dias
         _, mensagens = mail.search(None, "ALL")
         todos_ids = mensagens[0].split()
+        log.info("%d emails na caixa de entrada (verificando os 200 mais recentes)", len(todos_ids))
 
-        print(f"  {len(todos_ids)} emails na caixa de entrada")
-
-        for email_id in reversed(todos_ids[-200:]):  # Verifica os 200 mais recentes
+        for email_id in reversed(todos_ids[-200:]):
             email_id_str = email_id.decode()
 
             if email_id_str in ids_processados:
@@ -183,25 +198,30 @@ def buscar_emails_financeiros():
 
             if empresa:
                 emails_encontrados += 1
-                print(f"  → Email financeiro: [{empresa.upper()}] {assunto[:60]}")
+                log.info("Email financeiro encontrado: [%s] %s", empresa.upper(), assunto[:60])
 
+                log.info("Extraindo corpo do email...")
                 corpo = extrair_corpo(msg)
+                log.info("Corpo extraído (%d caracteres). Enviando para Claude...", len(corpo))
+
                 interpretacao = interpretar_com_claude(remetente, assunto, corpo, empresa)
+                log.info("Claude interpretou o email com sucesso")
+
                 salvar_no_arquivo(empresa, remetente, assunto, data_email, interpretacao)
                 salvar_id_processado(email_id_str)
                 emails_processados += 1
 
-                time.sleep(1)  # Pausa entre chamadas à API
+                time.sleep(1)
 
         mail.logout()
+        log.info("Desconectado do Gmail")
 
     except Exception as e:
-        print(f"  ✗ Erro: {e}")
+        log.error("Erro durante a verificação: %s", e, exc_info=True)
 
-    print(f"  Concluído: {emails_processados} emails financeiros processados")
-    if not os.path.exists(ARQUIVO_SAIDA) or emails_processados == 0:
-        if emails_encontrados == 0:
-            print("  Nenhum email financeiro encontrado nesta verificação")
+    if emails_encontrados == 0:
+        log.info("Nenhum email financeiro novo encontrado")
+    log.info("--- Verificação concluída: %d email(s) processado(s) ---", emails_processados)
 
 
 def inicializar_arquivo():
@@ -211,27 +231,26 @@ def inicializar_arquivo():
             f.write(f"# Resumo Financeiro por Email\n")
             f.write(f"Gerado automaticamente pelo Agente de Email Financeiro\n")
             f.write(f"Iniciado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
-        print(f"Arquivo criado: {ARQUIVO_SAIDA}")
+        log.info("Arquivo de saída criado: %s", ARQUIVO_SAIDA)
 
 
 def main():
-    print("=" * 50)
-    print("  Agente de Email Financeiro")
-    print("=" * 50)
-    print(f"Monitorando: {', '.join(FILTROS_FINANCEIROS.keys()).upper()}")
-    print(f"Intervalo: a cada {INTERVALO_MINUTOS} minutos")
-    print(f"Arquivo de saída: {ARQUIVO_SAIDA}")
-    print("=" * 50)
+    log.info("========================================")
+    log.info("  Agente de Email Financeiro iniciado")
+    log.info("========================================")
+    log.info("Monitorando: %s", ", ".join(FILTROS_FINANCEIROS.keys()).upper())
+    log.info("Intervalo: a cada %d minutos", INTERVALO_MINUTOS)
+    log.info("Arquivo de saída: %s", ARQUIVO_SAIDA)
+    log.info("Log salvo em: %s", LOG_FILE)
+    log.info("========================================")
 
     inicializar_arquivo()
 
-    # Executa imediatamente na primeira vez
     buscar_emails_financeiros()
 
-    # Agenda execução periódica
     schedule.every(INTERVALO_MINUTOS).minutes.do(buscar_emails_financeiros)
 
-    print(f"\nAgente rodando... (Ctrl+C para parar)")
+    log.info("Agente rodando... (Ctrl+C para parar)")
     while True:
         schedule.run_pending()
         time.sleep(60)
