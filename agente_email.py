@@ -896,7 +896,47 @@ def inicializar_arquivo():
         log.info("Arquivo de saída criado: %s", ARQUIVO_SAIDA)
 
 
+def restart():
+    """Apaga todos os dados locais: base, relatório, emails lidos, estado e paychecks."""
+    arquivos = [
+        ARQUIVO_BASE,
+        ARQUIVO_SAIDA,
+        ARQUIVO_IDS_PROCESSADOS,
+        ARQUIVO_ESTADO,
+        ARQUIVO_PAYCHECKS,
+    ]
+    print("\n  ⚠️  RESTART — os seguintes arquivos serão apagados:")
+    for arq in arquivos:
+        status = "existe" if os.path.exists(arq) else "não existe"
+        print(f"    {arq}  ({status})")
+    print()
+    try:
+        confirmacao = input("  Confirma? (s/N): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        confirmacao = ""
+    if confirmacao != "s":
+        print("  Cancelado.\n")
+        return
+    for arq in arquivos:
+        if os.path.exists(arq):
+            os.remove(arq)
+            log.info("Removido: %s", arq)
+    print("  Dados resetados. O agente vai reprocessar tudo do zero.\n")
+
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Agente de Email Financeiro")
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Limpa todos os dados locais (base, relatório, emails lidos, estado, paychecks) e reinicia do zero.",
+    )
+    args = parser.parse_args()
+
+    if args.restart:
+        restart()
+
     log.info("========================================")
     log.info("  Agente de Email Financeiro iniciado")
     log.info("========================================")
