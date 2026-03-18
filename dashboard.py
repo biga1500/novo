@@ -8,9 +8,12 @@ from collections import defaultdict
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+import anthropic
 from flask import Flask, jsonify, render_template
 
-from config import ARQUIVO_BASE
+from config import ARQUIVO_BASE, ANTHROPIC_API_KEY, MODEL
+
+claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 app = Flask(__name__)
 
@@ -115,6 +118,46 @@ def api_resumo():
         "por_moeda": dict(por_moeda),
         "transacoes": transacoes_sorted,
     })
+
+
+@app.route("/api/resumo-ia")
+def api_resumo_ia():
+    base = carregar_base()
+    if not base:
+        return jsonify({"resumo": "Nenhuma transação encontrada na base."})
+
+    # Monta um resumo compacto das transações para enviar ao Claude
+    linhas = []
+    for t in base:
+        dt = parse_data(t.get("data", ""))
+        data_fmt = dt.strftime("%d/%m/%Y") if dt else t.get("data", "?")
+        linhas.append(
+            f"- [{data_fmt}] {t.get('empresa','?').upper()} | "
+            f"{t.get('tipo','?')} | R$ {t.get('valor','0')} {t.get('moeda','')} | "
+            f"{t.get('categoria','?')} | {t.get('descricao','')}"
+        )
+
+    historico = "\n".join(linhas)
+    prompt = f"""Você é um analista financeiro pessoal. Com base nas transações abaixo, gere um resumo financeiro completo em markdown.
+
+TRANSAÇÕES:
+{historico}
+
+Inclua:
+1. **Visão geral** — total de entradas, saídas e saldo
+2. **Principais fontes de renda** — de onde veio o dinheiro
+3. **Principais gastos** — onde o dinheiro foi
+4. **Padrões identificados** — recorrências, tendências
+5. **Insights e recomendações** — o que chama atenção, sugestões práticas
+
+Seja direto, use números reais do histórico, formate bem com markdown."""
+
+    response = claude.messages.create(
+        model=MODEL,
+        max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return jsonify({"resumo": response.content[0].text})
 
 
 if __name__ == "__main__":

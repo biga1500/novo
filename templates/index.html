@@ -113,6 +113,65 @@
       padding: 60px;
       color: #64748b;
     }
+
+    /* Abas */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid #1e2535;
+      margin-bottom: 24px;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      color: #64748b;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab-btn:hover { color: #e2e8f0; }
+    .tab-btn.ativo { color: #60a5fa; border-bottom-color: #60a5fa; font-weight: 600; }
+    .tab-panel { display: none; flex-direction: column; gap: 24px; }
+    .tab-panel.ativo { display: flex; }
+
+    /* Resumo IA */
+    .resumo-ia-box {
+      background: #1a1f2e;
+      border: 1px solid #1e2535;
+      border-radius: 12px;
+      padding: 28px 32px;
+      line-height: 1.7;
+    }
+    .resumo-ia-box h1, .resumo-ia-box h2, .resumo-ia-box h3 {
+      color: #f1f5f9; margin: 20px 0 8px;
+    }
+    .resumo-ia-box h1 { font-size: 1.2rem; }
+    .resumo-ia-box h2 { font-size: 1rem; }
+    .resumo-ia-box h3 { font-size: 0.95rem; color: #94a3b8; }
+    .resumo-ia-box p  { color: #cbd5e1; margin: 6px 0; }
+    .resumo-ia-box ul, .resumo-ia-box ol { padding-left: 20px; color: #cbd5e1; }
+    .resumo-ia-box li { margin: 4px 0; }
+    .resumo-ia-box strong { color: #f1f5f9; }
+    .resumo-ia-box code { background: #0f1117; padding: 1px 6px; border-radius: 4px; font-size: 0.85em; }
+    .resumo-ia-box hr { border: none; border-top: 1px solid #1e2535; margin: 16px 0; }
+    .resumo-ia-box blockquote { border-left: 3px solid #334155; padding-left: 12px; color: #94a3b8; }
+
+    #btn-gerar-resumo {
+      align-self: flex-start;
+      background: #7c3aed;
+      color: #fff;
+      border: none;
+      padding: 10px 22px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+    #btn-gerar-resumo:hover { background: #6d28d9; }
+    #btn-gerar-resumo:disabled { opacity: 0.5; cursor: not-allowed; }
+    #resumo-ia-placeholder { color: #64748b; font-size: 0.9rem; padding: 40px 0; text-align: center; }
   </style>
 </head>
 <body>
@@ -131,58 +190,78 @@
     </div>
 
     <div id="conteudo">
-      <!-- Cards -->
-      <div class="cards">
-        <div class="card verde">
-          <div class="label">Total Entradas</div>
-          <div class="value" id="c-entradas">—</div>
+      <!-- Abas -->
+      <div class="tabs">
+        <button class="tab-btn ativo" onclick="mudarAba('visao-geral', this)">Visão Geral</button>
+        <button class="tab-btn" onclick="mudarAba('resumo-ia', this)">Resumo IA</button>
+      </div>
+
+      <!-- ABA: Visão Geral -->
+      <div id="aba-visao-geral" class="tab-panel ativo">
+        <!-- Cards -->
+        <div class="cards">
+          <div class="card verde">
+            <div class="label">Total Entradas</div>
+            <div class="value" id="c-entradas">—</div>
+          </div>
+          <div class="card vermelho">
+            <div class="label">Total Saídas</div>
+            <div class="value" id="c-saidas">—</div>
+          </div>
+          <div class="card azul">
+            <div class="label">Saldo</div>
+            <div class="value" id="c-saldo">—</div>
+          </div>
+          <div class="card amarelo">
+            <div class="label">Transações</div>
+            <div class="value" id="c-total">—</div>
+          </div>
         </div>
-        <div class="card vermelho">
-          <div class="label">Total Saídas</div>
-          <div class="value" id="c-saidas">—</div>
+
+        <!-- Gráficos -->
+        <div class="charts-grid">
+          <div class="chart-box">
+            <h2>Valores por Empresa</h2>
+            <canvas id="g-empresa"></canvas>
+          </div>
+          <div class="chart-box">
+            <h2>Distribuição por Categoria</h2>
+            <canvas id="g-categoria"></canvas>
+          </div>
+          <div class="chart-box" style="grid-column: 1 / -1">
+            <h2>Evolução Mensal</h2>
+            <canvas id="g-mensal"></canvas>
+          </div>
         </div>
-        <div class="card azul">
-          <div class="label">Saldo</div>
-          <div class="value" id="c-saldo">—</div>
-        </div>
-        <div class="card amarelo">
-          <div class="label">Transações</div>
-          <div class="value" id="c-total">—</div>
+
+        <!-- Tabela -->
+        <div class="tabela-box">
+          <h2>Transações Recentes</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Empresa</th>
+                <th>Tipo</th>
+                <th>Categoria</th>
+                <th>Valor</th>
+                <th>Descrição</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
         </div>
       </div>
 
-      <!-- Gráficos -->
-      <div class="charts-grid">
-        <div class="chart-box">
-          <h2>Valores por Empresa</h2>
-          <canvas id="g-empresa"></canvas>
+      <!-- ABA: Resumo IA -->
+      <div id="aba-resumo-ia" class="tab-panel">
+        <button id="btn-gerar-resumo" onclick="gerarResumoIA()">Gerar Resumo com Claude</button>
+        <div class="resumo-ia-box">
+          <div id="resumo-ia-placeholder">
+            Clique em "Gerar Resumo com Claude" para obter uma análise completa das suas finanças.
+          </div>
+          <div id="resumo-ia-conteudo" style="display:none"></div>
         </div>
-        <div class="chart-box">
-          <h2>Distribuição por Categoria</h2>
-          <canvas id="g-categoria"></canvas>
-        </div>
-        <div class="chart-box" style="grid-column: 1 / -1">
-          <h2>Evolução Mensal</h2>
-          <canvas id="g-mensal"></canvas>
-        </div>
-      </div>
-
-      <!-- Tabela -->
-      <div class="tabela-box">
-        <h2>Transações Recentes</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Empresa</th>
-              <th>Tipo</th>
-              <th>Categoria</th>
-              <th>Valor</th>
-              <th>Descrição</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
       </div>
     </div>
   </main>
@@ -332,6 +411,57 @@
     }
 
     carregar();
+
+    function mudarAba(id, btn) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('ativo'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('ativo'));
+      document.getElementById('aba-' + id).classList.add('ativo');
+      btn.classList.add('ativo');
+    }
+
+    // Renderiza markdown simples sem dependência externa
+    function renderMd(texto) {
+      return texto
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+        .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
+        .replace(/^# (.+)$/gm,   '<h1>$1</h1>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g,    '<em>$1</em>')
+        .replace(/`(.+?)`/g,      '<code>$1</code>')
+        .replace(/^---$/gm,       '<hr>')
+        .replace(/^> (.+)$/gm,    '<blockquote>$1</blockquote>')
+        .replace(/^\s*[-*] (.+)$/gm, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>\n?)+/g, s => `<ul>${s}</ul>`)
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/^(?!<[hul]|<hr|<bl)(.+)$/gm, '<p>$1</p>')
+        .replace(/<p><\/p>/g, '');
+    }
+
+    async function gerarResumoIA() {
+      const btn = document.getElementById('btn-gerar-resumo');
+      const placeholder = document.getElementById('resumo-ia-placeholder');
+      const conteudo = document.getElementById('resumo-ia-conteudo');
+
+      btn.disabled = true;
+      btn.textContent = 'Gerando análise...';
+      placeholder.style.display = 'block';
+      placeholder.textContent = 'Claude está analisando suas finanças...';
+      conteudo.style.display = 'none';
+
+      try {
+        const resp = await fetch('/api/resumo-ia');
+        const d = await resp.json();
+        placeholder.style.display = 'none';
+        conteudo.style.display = 'block';
+        conteudo.innerHTML = renderMd(d.resumo);
+      } catch (e) {
+        placeholder.textContent = 'Erro ao gerar resumo. Verifique se o agente está configurado.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Atualizar Resumo';
+      }
+    }
   </script>
 </body>
 </html>

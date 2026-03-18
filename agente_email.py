@@ -406,14 +406,48 @@ def processar_anexos_extrato(msg, empresa: str, data_email: str) -> int:
 
 # ─── Claude ─────────────────────────────────────────────────────────────────
 
+def _chamar_claude(messages: list) -> str:
+    """Faz a chamada à API e retorna o texto da resposta."""
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        messages=messages,
+    )
+    return response.content[0].text.strip()
+
+
+def _parse_json_claude(texto: str, empresa: str) -> dict:
+    """Extrai JSON da resposta do Claude, com fallback."""
+    if texto.startswith("```"):
+        texto = texto.split("```")[1]
+        if texto.startswith("json"):
+            texto = texto[4:]
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError:
+        return {
+            "tipo": "desconhecido",
+            "valor": None,
+            "moeda": None,
+            "origem": empresa,
+            "destino": "desconhecido",
+            "categoria": "outro",
+            "descricao": texto[:200],
+            "observacoes": "",
+            "resumo_markdown": texto,
+            "confianca": "baixa",
+            "duvida": None,
+        }
+
+
 def interpretar_com_claude(remetente: str, assunto: str, corpo: str, empresa: str, data_email: str) -> dict:
     """
-    Usa Claude para interpretar o email e retornar um dict estruturado.
-    Também recebe o histórico da base para cruzar informações.
+    Usa Claude para interpretar o email. Se Claude tiver dúvida (confianca != alta),
+    pergunta ao usuário no terminal e refaz a interpretação com o esclarecimento.
     """
     contexto_historico = resumo_base_para_contexto()
 
-    prompt = f"""Você é um assistente financeiro pessoal inteligente. Analise o email abaixo e extraia informações financeiras detalhadas.
+    prompt_sistema = f"""Você é um assistente financeiro pessoal inteligente. Analise o email abaixo e extraia informações financeiras detalhadas.
 
 ━━━ HISTÓRICO DE TRANSAÇÕES ANTERIORES ━━━
 {contexto_historico}
@@ -439,40 +473,48 @@ Com base no email e no histórico acima, responda em JSON com exatamente estes c
   "categoria": "salário | freelance | transferência | pagamento | fatura | cashback | investimento | outro",
   "descricao": "resumo claro em 1-2 frases do que aconteceu",
   "observacoes": "cruzamentos com histórico anterior, padrões identificados, ou observações relevantes",
-  "resumo_markdown": "texto formatado em markdown para o relatório, com todos os detalhes importantes"
+  "resumo_markdown": "texto formatado em markdown para o relatório, com todos os detalhes importantes",
+  "confianca": "alta | media | baixa  — sua confiança na interpretação acima",
+  "duvida": "se confianca for media ou baixa, escreva aqui UMA pergunta objetiva para o usuário esclarecer; caso contrário null"
 }}
 
 Responda SOMENTE o JSON, sem texto adicional."""
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    messages = [{"role": "user", "content": prompt_sistema}]
+    texto = _chamar_claude(messages)
+    dados = _parse_json_claude(texto, empresa)
 
-    texto = response.content[0].text.strip()
+    # Se Claude tiver dúvida, pergunta ao usuário e refaz
+    confianca = dados.get("confianca", "alta")
+    duvida = dados.get("duvida")
 
-    # Remove blocos de código markdown se presentes
-    if texto.startswith("```"):
-        texto = texto.split("```")[1]
-        if texto.startswith("json"):
-            texto = texto[4:]
+    if confianca in ("media", "baixa") and duvida:
+        log.info("Claude tem dúvida sobre este email (confiança: %s)", confianca)
+        print("\n" + "─" * 60)
+        print(f"  Email: [{empresa.upper()}] {assunto[:70]}")
+        print(f"  Interpretação atual: {dados.get('tipo','?')} | {dados.get('valor','?')} {dados.get('moeda','')}")
+        print(f"\n  Claude pergunta: {duvida}")
+        print("─" * 60)
 
-    try:
-        dados = json.loads(texto)
-    except json.JSONDecodeError:
-        # Fallback se Claude não retornar JSON válido
-        dados = {
-            "tipo": "desconhecido",
-            "valor": None,
-            "moeda": None,
-            "origem": empresa,
-            "destino": "desconhecido",
-            "categoria": "outro",
-            "descricao": texto[:200],
-            "observacoes": "",
-            "resumo_markdown": texto,
-        }
+        try:
+            resposta_usuario = input("  Sua resposta (Enter para pular): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            resposta_usuario = ""
+
+        if resposta_usuario:
+            # Adiciona o esclarecimento ao histórico de mensagens e chama novamente
+            messages.append({"role": "assistant", "content": texto})
+            messages.append({"role": "user", "content": (
+                f"Esclarecimento do usuário: {resposta_usuario}\n\n"
+                "Com base nesse esclarecimento, reanalise e retorne o JSON corrigido."
+            )})
+            texto2 = _chamar_claude(messages)
+            dados = _parse_json_claude(texto2, empresa)
+            log.info("Claude reinterpretou com esclarecimento do usuário.")
+        else:
+            log.info("Usuário pulou a pergunta — mantendo interpretação original.")
+
+        print()
 
     return dados
 
