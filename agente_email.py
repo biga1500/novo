@@ -53,6 +53,30 @@ FILTROS_FINANCEIROS = {
     "ontop": ["ontop.ai", "ontop"],
 }
 
+# Padrões de assunto para IGNORAR (não enviar ao Claude)
+# Mesmo que venham de remetentes financeiros conhecidos
+ASSUNTOS_IGNORAR = [
+    # Marketing / promoção
+    "promoç", "promoc", "oferta", "desconto", "black friday", "cyber monday",
+    "cashback especial", "ganhe mais", "aproveite", "exclusivo para você",
+    "não perca", "nao perca", "últimas horas", "ultimas horas",
+    # Newsletter / informativo genérico
+    "newsletter", "novidades", "atualização do app", "atualizacao do app",
+    "nova funcionalidade", "conheça", "conheca", "lançamento", "lancamento",
+    "blog", "dica", "dicas",
+    # Confirmação / segurança / conta
+    "confirme seu email", "confirme seu e-mail", "verifique seu email",
+    "valide seu", "ative sua conta", "bem-vindo", "bem vindo", "boas-vindas",
+    "bem-vinda", "cadastro realizado", "senha alterada", "senha redefinida",
+    "login realizado", "acesso à sua conta",
+    # Pesquisa / avaliação
+    "pesquisa de satisfação", "avalie", "nos dê sua opinião", "feedback",
+    "nps", "como foi sua experiência",
+    # Outros irrelevantes
+    "indicação", "indicacao", "convide", "programa de pontos",
+    "regulamento", "termos de uso", "política de privacidade",
+]
+
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
@@ -166,6 +190,12 @@ def identificar_remetente(remetente: str, assunto: str) -> str | None:
             if palavra in remetente_lower or palavra in assunto_lower:
                 return empresa
     return None
+
+
+def assunto_deve_ignorar(assunto: str) -> bool:
+    """Retorna True se o assunto bater com algum padrão não-financeiro a ignorar."""
+    assunto_lower = assunto.lower()
+    return any(padrao in assunto_lower for padrao in ASSUNTOS_IGNORAR)
 
 
 # ─── Anexos / Extratos ──────────────────────────────────────────────────────
@@ -595,6 +625,11 @@ def buscar_emails_financeiros():
             empresa = identificar_remetente(remetente, assunto)
 
             if empresa:
+                if assunto_deve_ignorar(assunto):
+                    log.debug("Ignorado (assunto não-financeiro): %s", assunto[:70])
+                    salvar_id_processado(email_id_str)
+                    continue
+
                 emails_encontrados += 1
                 log.info("Email financeiro encontrado: [%s] %s", empresa.upper(), assunto[:60])
 
