@@ -4,7 +4,7 @@ Lê emails do Gmail de remetentes financeiros e interpreta com Claude.
 """
 
 import imaplib
-imaplib._MAXLINE = 10_000_000  # aumenta limite de 1MB para 10MB
+imaplib._MAXLINE = 300_000_000  # aumenta limite para 300MB
 import email
 import os
 import json
