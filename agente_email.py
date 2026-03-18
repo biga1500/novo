@@ -44,6 +44,13 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 ARQUIVO_IDS_PROCESSADOS = ".emails_processados.json"
 ARQUIVO_ESTADO = ".agente_estado.json"
+ARQUIVO_PAYCHECKS = ".paychecks_pendentes.json"
+
+# Valor fixo do paycheck por empresa (USD)
+VALOR_PAYCHECK = {
+    "ontop": "3200.00",
+    "deel": "2000.00",
+}
 
 # Remetentes/assuntos financeiros a monitorar
 FILTROS_FINANCEIROS = {
@@ -644,6 +651,15 @@ def buscar_emails_financeiros():
                 emails_encontrados += 1
                 log.info("Email financeiro encontrado: [%s] %s", empresa.upper(), assunto[:60])
 
+                # 0) Detecta "paycheck received" — registra valor fixo sem chamar Claude
+                corpo_preview = extrair_corpo(msg)
+                if empresa in VALOR_PAYCHECK and _detectar_paycheck(assunto, corpo_preview):
+                    log.info("Paycheck detectado: [%s]", empresa.upper())
+                    registrar_paycheck(empresa, data_email, email_id_str)
+                    salvar_id_processado(email_id_str)
+                    emails_processados += 1
+                    continue
+
                 # 1) Tenta importar anexos CSV/OFX — prioridade sobre interpretação do corpo
                 n_importadas = processar_anexos_extrato(msg, empresa, data_email)
 
@@ -654,7 +670,7 @@ def buscar_emails_financeiros():
                     )
                 else:
                     # 2) Sem anexo: interpreta o corpo do email com Claude
-                    corpo = extrair_corpo(msg)
+                    corpo = corpo_preview  # já extraído acima
                     log.info("Corpo extraído (%d caracteres). Enviando para Claude...", len(corpo))
 
                     dados = interpretar_com_claude(remetente, assunto, corpo, empresa, data_email)
@@ -692,6 +708,183 @@ def buscar_emails_financeiros():
     log.info("--- Verificação concluída: %d email(s) processado(s) ---", emails_processados)
 
 
+# ─── Paycheck ────────────────────────────────────────────────────────────────
+
+def _carregar_paychecks() -> list:
+    if os.path.exists(ARQUIVO_PAYCHECKS):
+        with open(ARQUIVO_PAYCHECKS, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def _salvar_paychecks(paychecks: list):
+    with open(ARQUIVO_PAYCHECKS, "w", encoding="utf-8") as f:
+        json.dump(paychecks, f, ensure_ascii=False, indent=2)
+
+
+def _detectar_paycheck(assunto: str, corpo: str) -> bool:
+    texto = (assunto + " " + corpo).lower()
+    return "paycheck received" in texto
+
+
+def registrar_paycheck(empresa: str, data_email: str, id_email: str):
+    """Salva paycheck na base financeira e adiciona à fila de confirmação diária."""
+    valor = VALOR_PAYCHECK.get(empresa)
+    if not valor:
+        return
+
+    hash_id = _hash_transacao(data_email, valor, f"paycheck {empresa}")
+    if _transacao_ja_existe(hash_id):
+        log.info("Paycheck já registrado: %s %s", empresa, data_email)
+        return
+
+    data_iso = datetime.now().strftime("%Y-%m-%d")
+    transacao = {
+        "hash_extrato": hash_id,
+        "data": data_iso,
+        "empresa": empresa,
+        "remetente": f"payments@{empresa}.{'ai' if empresa == 'ontop' else 'com'}",
+        "assunto": f"Paycheck received — {empresa.upper()}",
+        "tipo": "entrada",
+        "valor": valor,
+        "moeda": "USD",
+        "origem": empresa.upper(),
+        "destino": "conta pessoal",
+        "categoria": "salário",
+        "descricao": f"Paycheck {empresa.upper()} — ${valor}",
+        "observacoes": "Registrado automaticamente via detecção de paycheck no email.",
+        "resumo_markdown": f"**Paycheck {empresa.upper()}** — ${valor} USD recebido em {data_iso}",
+        "fonte": "email_corpo",
+        "id_email": id_email,
+        "confianca": "alta",
+    }
+    salvar_na_base(transacao)
+    salvar_no_arquivo(empresa, transacao["remetente"], transacao["assunto"], data_iso, transacao)
+    log.info("Paycheck registrado: %s $%s USD", empresa.upper(), valor)
+
+    # Adiciona à fila de confirmação diária
+    paychecks = _carregar_paychecks()
+    paychecks.append({
+        "hash": hash_id,
+        "empresa": empresa,
+        "valor": valor,
+        "data_recebimento": data_iso,
+        "ultima_pergunta": None,
+        "status": "pendente",
+    })
+    _salvar_paychecks(paychecks)
+    log.info("Paycheck adicionado à fila de confirmação diária.")
+
+
+def verificar_paychecks_pendentes():
+    """
+    Job diário: pergunta se o dinheiro ainda está na conta.
+    Se sim, agenda para amanhã. Se não, registra o destino.
+    """
+    paychecks = _carregar_paychecks()
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    pendentes = [
+        p for p in paychecks
+        if p["status"] == "pendente" and p.get("ultima_pergunta") != hoje
+    ]
+
+    if not pendentes:
+        return
+
+    alterados = False
+    for p in pendentes:
+        empresa = p["empresa"].upper()
+        valor = p["valor"]
+        data = p["data_recebimento"]
+
+        print("\n" + "═" * 60)
+        print(f"  💰  PAYCHECK {empresa} — ${valor} USD")
+        print(f"  Recebido em: {data}")
+        print("═" * 60)
+        print("  O dinheiro ainda está na conta?")
+        print("  [1] Sim, ainda está")
+        print("  [2] Não, já enviei")
+        print("─" * 60)
+
+        try:
+            resp = input("  Escolha (1/2): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            resp = ""
+
+        if resp == "1":
+            p["ultima_pergunta"] = hoje
+            log.info("Paycheck %s ainda na conta — perguntarei amanhã.", empresa)
+            alterados = True
+
+        elif resp == "2":
+            print("\n  Você enviou para?")
+            print("  [1] Carteira cripto")
+            print("  [2] Brasil — Nubank")
+            print("  [3] Outro (digitar)")
+            print("─" * 60)
+            try:
+                dest_resp = input("  Escolha (1/2/3): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                dest_resp = ""
+
+            if dest_resp == "1":
+                destino = "carteira cripto"
+            elif dest_resp == "2":
+                destino = "Brasil — Nubank"
+            elif dest_resp == "3":
+                try:
+                    destino = input("  Para onde? ").strip() or "outro"
+                except (EOFError, KeyboardInterrupt):
+                    destino = "outro"
+            else:
+                destino = "desconhecido"
+
+            # Registra a transferência na base
+            data_iso = datetime.now().strftime("%Y-%m-%d")
+            hash_transf = _hash_transacao(data_iso, valor, f"envio {destino} {empresa}")
+            if not _transacao_ja_existe(hash_transf):
+                transacao_envio = {
+                    "hash_extrato": hash_transf,
+                    "data": data_iso,
+                    "empresa": p["empresa"],
+                    "remetente": "usuario",
+                    "assunto": f"Envio paycheck {empresa} → {destino}",
+                    "tipo": "saída",
+                    "valor": valor,
+                    "moeda": "USD",
+                    "origem": "conta pessoal",
+                    "destino": destino,
+                    "categoria": "transferência",
+                    "descricao": f"Paycheck {empresa} enviado para {destino}",
+                    "observacoes": f"Confirmado pelo usuário em {data_iso}.",
+                    "resumo_markdown": (
+                        f"**Envio** — ${valor} USD do paycheck {empresa} "
+                        f"transferido para **{destino}** em {data_iso}"
+                    ),
+                    "fonte": "confirmacao_usuario",
+                    "confianca": "alta",
+                }
+                salvar_na_base(transacao_envio)
+                salvar_no_arquivo(
+                    p["empresa"], "usuario",
+                    transacao_envio["assunto"], data_iso, transacao_envio
+                )
+                log.info("Transferência registrada: %s $%s → %s", empresa, valor, destino)
+
+            p["status"] = "enviado"
+            p["destino_final"] = destino
+            alterados = True
+            print(f"\n  ✓ Registrado: ${valor} USD enviado para {destino}\n")
+
+        else:
+            # Sem resposta — pula, pergunta amanhã
+            p["ultima_pergunta"] = hoje
+            alterados = True
+
+    if alterados:
+        _salvar_paychecks(paychecks)
+
+
 # ─── Init ────────────────────────────────────────────────────────────────────
 
 def inicializar_arquivo():
@@ -718,6 +911,11 @@ def main():
     buscar_emails_financeiros()
 
     schedule.every(INTERVALO_MINUTOS).minutes.do(buscar_emails_financeiros)
+
+    # Verificação diária de paychecks pendentes (10h da manhã)
+    schedule.every().day.at("10:00").do(verificar_paychecks_pendentes)
+    # Roda também agora, caso já haja paychecks aguardando resposta
+    verificar_paychecks_pendentes()
 
     log.info("Agente rodando... (Ctrl+C para parar)")
     while True:
