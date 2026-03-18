@@ -724,14 +724,39 @@ def _salvar_paychecks(paychecks: list):
 
 def _detectar_paycheck(assunto: str, corpo: str) -> bool:
     texto = (assunto + " " + corpo).lower()
-    return "paycheck received" in texto
+    return "paycheck received" in texto or "you've been paid" in texto or "you have been paid" in texto
 
 
 def registrar_paycheck(empresa: str, data_email: str, id_email: str):
     """Salva paycheck na base financeira e adiciona à fila de confirmação diária."""
-    valor = VALOR_PAYCHECK.get(empresa)
-    if not valor:
+    valor_padrao = VALOR_PAYCHECK.get(empresa)
+    if not valor_padrao:
         return
+
+    # Pergunta o valor ao usuário; Enter usa o padrão
+    print("\n" + "─" * 60)
+    print(f"  💰  PAYCHECK {empresa.upper()} detectado!")
+    print(f"  Padrão para {empresa.upper()}: ${valor_padrao} USD")
+    print("─" * 60)
+    try:
+        resposta = input(f"  Quanto entrou? [Enter = ${valor_padrao}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        resposta = ""
+
+    if resposta:
+        # Aceita formatos: "2000", "2.000", "2,000", "2000.00"
+        valor = resposta.replace(",", "").replace(".", "").lstrip("$").strip()
+        # Tenta preservar decimais se o usuário digitou com ponto decimal
+        try:
+            valor_float = float(resposta.replace(",", ""))
+            valor = f"{valor_float:.2f}"
+        except ValueError:
+            valor = valor_padrao
+            log.warning("Valor inválido informado ('%s'), usando padrão: %s", resposta, valor_padrao)
+    else:
+        valor = valor_padrao
+
+    print(f"  ✓ Valor registrado: ${valor} USD\n")
 
     hash_id = _hash_transacao(data_email, valor, f"paycheck {empresa}")
     if _transacao_ja_existe(hash_id):
