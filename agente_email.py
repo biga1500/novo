@@ -255,9 +255,29 @@ def _inferir_categoria(descricao: str, valor: float) -> str:
         return "transferência"
     if any(p in desc for p in ["cashback", "rewards"]):
         return "cashback"
-    if any(p in desc for p in ["invest", "rdb", "cdb", "lci", "lca"]):
+    if any(p in desc for p in ["compra de aç", "compra de ac", "compra ação", "compra acao"]):
+        return "compra_ação"
+    if any(p in desc for p in ["venda de aç", "venda de ac", "venda ação", "venda acao"]):
+        return "venda_ação"
+    if any(p in desc for p in ["invest", "rdb", "cdb", "lci", "lca", "tesouro"]):
         return "investimento"
     return "pagamento" if valor < 0 else "outro"
+
+
+def _extrair_ticker(memo: str) -> str | None:
+    """Extrai o ticker da ação (ex: PETR4, VALE3) de uma descrição OFX."""
+    m = re.search(r'\b([A-Z]{3,5}\d{1,2})\b', memo.upper())
+    return m.group(1) if m else None
+
+
+def _eh_operacao_acoes(memo: str) -> tuple[bool, str]:
+    """Retorna (é_ação, 'compra'|'venda') para memos de operações de bolsa."""
+    desc = memo.lower()
+    if any(p in desc for p in ["compra de aç", "compra de ac", "compra ação", "compra acao"]):
+        return True, "compra"
+    if any(p in desc for p in ["venda de aç", "venda de ac", "venda ação", "venda acao"]):
+        return True, "venda"
+    return False, ""
 
 
 # ── Parser CSV (Nubank e formato genérico) ───────────────────────────────────
@@ -395,12 +415,28 @@ def parsear_ofx(conteudo: bytes, empresa: str) -> list[dict]:
             log.debug("Transação já existe (OFX), ignorando: %s %s", data_iso, memo)
             continue
 
-        tipo = "entrada" if valor > 0 else "saída"
-        categoria = _inferir_categoria(memo, valor)
+        eh_acao, subtipo_acao = _eh_operacao_acoes(memo)
+        if eh_acao:
+            ticker = _extrair_ticker(memo)
+            tipo = f"{subtipo_acao}_ação"
+            categoria = "ação"
+            ticker_str = f" ({ticker})" if ticker else ""
+            resumo_md = (
+                f"**{subtipo_acao.capitalize()} de Ação{ticker_str}** — "
+                f"R$ {abs(valor):.2f} em {data_iso} | {memo}"
+            )
+            obs = f"Operação de bolsa detectada no extrato OFX — {data_iso}"
+        else:
+            tipo = "entrada" if valor > 0 else "saída"
+            categoria = _inferir_categoria(memo, valor)
+            ticker = None
+            resumo_md = f"**{memo}** — {tipo} de R$ {abs(valor):.2f} em {data_iso}"
+            obs = f"Importado de arquivo OFX — {data_iso}"
+
         origem = empresa if valor < 0 else memo
         destino = memo if valor < 0 else empresa
 
-        transacoes.append({
+        entrada = {
             "hash_extrato": hash_id,
             "data": data_iso,
             "empresa": empresa,
@@ -413,12 +449,65 @@ def parsear_ofx(conteudo: bytes, empresa: str) -> list[dict]:
             "destino": destino,
             "categoria": categoria,
             "descricao": memo,
-            "observacoes": f"Importado de arquivo OFX — {data_iso}",
-            "resumo_markdown": f"**{memo}** — {tipo} de R$ {abs(valor):.2f} em {data_iso}",
+            "observacoes": obs,
+            "resumo_markdown": resumo_md,
             "fonte": "extrato_ofx",
-        })
+        }
+        if ticker:
+            entrada["ticker"] = ticker
+        transacoes.append(entrada)
 
     return transacoes
+
+
+def _perguntar_saldo_carteira(empresa: str, data_email: str):
+    """Pergunta o saldo atual da carteira de investimentos após operações de ações."""
+    print("\n" + "─" * 60)
+    print(f"  📈  Operações de ações detectadas no extrato {empresa.upper()}")
+    print("─" * 60)
+    try:
+        resposta = input("  Saldo atual da carteira de investimentos? [Enter para pular]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        resposta = ""
+
+    if not resposta:
+        return
+
+    try:
+        valor_float = float(resposta.replace("R$", "").replace(".", "").replace(",", ".").strip())
+        valor = f"{valor_float:.2f}"
+    except ValueError:
+        log.warning("Saldo inválido informado: '%s'", resposta)
+        return
+
+    data_iso = datetime.now().strftime("%Y-%m-%d")
+    hash_id = _hash_transacao(data_iso, valor, "snapshot_carteira")
+    if _transacao_ja_existe(hash_id):
+        log.info("Snapshot de carteira já registrado para hoje.")
+        return
+
+    snapshot = {
+        "hash_extrato": hash_id,
+        "data": data_iso,
+        "empresa": empresa,
+        "remetente": "usuario",
+        "assunto": f"Saldo carteira — {empresa.upper()}",
+        "tipo": "snapshot_carteira",
+        "valor": valor,
+        "moeda": "BRL",
+        "origem": "carteira_investimentos",
+        "destino": "carteira_investimentos",
+        "categoria": "investimento",
+        "descricao": f"Saldo total da carteira de investimentos: R$ {valor}",
+        "observacoes": "Informado pelo usuário após operações de ações no extrato.",
+        "resumo_markdown": f"**Saldo carteira de investimentos** — R$ {valor} em {data_iso}",
+        "fonte": "confirmacao_usuario",
+        "confianca": "alta",
+    }
+    salvar_na_base(snapshot)
+    salvar_no_arquivo(empresa, "usuario", snapshot["assunto"], data_iso, snapshot)
+    log.info("Saldo carteira registrado: R$ %s", valor)
+    print(f"  ✓ Saldo registrado: R$ {valor}\n")
 
 
 def processar_anexos_extrato(msg, empresa: str, data_email: str) -> int:
@@ -431,6 +520,7 @@ def processar_anexos_extrato(msg, empresa: str, data_email: str) -> int:
         return 0
 
     total = 0
+    tem_operacoes_acoes = False
     for anexo in anexos:
         log.info("Processando anexo: %s", anexo["nome"])
         if anexo["tipo"] == "csv":
@@ -444,10 +534,15 @@ def processar_anexos_extrato(msg, empresa: str, data_email: str) -> int:
                 empresa, t["remetente"], t["assunto"], t["data"], t
             )
             total += 1
+            if t.get("categoria") == "ação":
+                tem_operacoes_acoes = True
 
         log.info(
             "%d transação(ões) importada(s) de %s", len(transacoes), anexo["nome"]
         )
+
+    if tem_operacoes_acoes:
+        _perguntar_saldo_carteira(empresa, data_email)
 
     return total
 
