@@ -55,7 +55,6 @@ VALOR_PAYCHECK = {
 # Remetentes/assuntos financeiros a monitorar
 FILTROS_FINANCEIROS = {
     "nubank": ["nubank.com.br", "nubank"],
-    "nomad": ["nomad.com", "nomad"],
     "deel": ["deel.com", "deel"],
     "ontop": ["ontop.ai", "ontop"],
 }
@@ -79,6 +78,9 @@ ASSUNTOS_IGNORAR = [
     # Pesquisa / avaliação
     "pesquisa de satisfação", "avalie", "nos dê sua opinião", "feedback",
     "nps", "como foi sua experiência",
+    # Votação / assembleia
+    "votação", "votacao", "vote agora", "vote já", "vote ja", "assembleia",
+    "edital de convocação", "edital de convocacao",
     # Outros irrelevantes
     "indicação", "indicacao", "convide", "programa de pontos",
     "regulamento", "termos de uso", "política de privacidade",
