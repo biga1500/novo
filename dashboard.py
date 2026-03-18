@@ -65,6 +65,15 @@ def api_resumo():
     por_moeda: dict[str, float] = defaultdict(float)
     transacoes = []
 
+    # Investimentos
+    total_comprado = 0.0
+    total_vendido = 0.0
+    ultimo_snapshot: float | None = None
+    ultimo_snapshot_dt: datetime | None = None
+    operacoes_acoes = []
+
+    TIPOS_ACOES = {"compra_ação", "compra_acao", "venda_ação", "venda_acao"}
+
     for t in base:
         valor = to_float(t.get("valor"))
         tipo = t.get("tipo", "").lower()
@@ -73,7 +82,34 @@ def api_resumo():
         moeda = t.get("moeda") or "BRL"
         dt = parse_data(t.get("data", ""))
         mes = dt.strftime("%Y-%m") if dt else "desconhecido"
+        data_fmt = dt.strftime("%d/%m/%Y") if dt else t.get("data", "?")
 
+        # ── snapshot da carteira ───────────────────────────────────────
+        if tipo == "snapshot_carteira":
+            if ultimo_snapshot_dt is None or (dt and dt > ultimo_snapshot_dt):
+                ultimo_snapshot = valor
+                ultimo_snapshot_dt = dt
+            continue  # não entra nas stats gerais
+
+        # ── operações de ações ─────────────────────────────────────────
+        if tipo in TIPOS_ACOES or categoria == "ação":
+            is_compra = "compra" in tipo
+            if is_compra:
+                total_comprado += valor
+            else:
+                total_vendido += valor
+            operacoes_acoes.append({
+                "data": data_fmt,
+                "empresa": empresa,
+                "tipo": tipo,
+                "ticker": t.get("ticker", ""),
+                "valor": valor,
+                "moeda": moeda,
+                "descricao": t.get("descricao", ""),
+            })
+            continue  # não entra nas stats gerais
+
+        # ── transações normais ─────────────────────────────────────────
         if tipo == "entrada" or categoria in ("salário", "freelance", "cashback"):
             total_entradas += valor
         elif tipo in ("saída", "pagamento", "fatura", "transferência"):
@@ -86,7 +122,7 @@ def api_resumo():
             por_moeda[moeda] += valor
 
         transacoes.append({
-            "data": dt.strftime("%d/%m/%Y") if dt else t.get("data", "?"),
+            "data": data_fmt,
             "empresa": empresa,
             "tipo": tipo,
             "categoria": categoria,
@@ -98,13 +134,14 @@ def api_resumo():
         })
 
     # Ordena transações da mais recente para a mais antiga
-    transacoes_sorted = sorted(
-        transacoes,
-        key=lambda x: datetime.strptime(x["data"], "%d/%m/%Y") if x["data"] != "?" else datetime.min,
-        reverse=True,
-    )
+    def _sort_key(x):
+        try:
+            return datetime.strptime(x["data"], "%d/%m/%Y")
+        except Exception:
+            return datetime.min
 
-    # Ordena meses cronologicamente
+    transacoes_sorted = sorted(transacoes, key=_sort_key, reverse=True)
+    operacoes_acoes_sorted = sorted(operacoes_acoes, key=_sort_key, reverse=True)
     meses_sorted = dict(sorted(por_mes.items()))
 
     return jsonify({
@@ -117,6 +154,13 @@ def api_resumo():
         "por_mes": meses_sorted,
         "por_moeda": dict(por_moeda),
         "transacoes": transacoes_sorted,
+        "investimentos": {
+            "total_comprado": round(total_comprado, 2),
+            "total_vendido": round(total_vendido, 2),
+            "saldo_liquido": round(total_comprado - total_vendido, 2),
+            "ultimo_snapshot": round(ultimo_snapshot, 2) if ultimo_snapshot is not None else None,
+            "operacoes": operacoes_acoes_sorted,
+        },
     })
 
 

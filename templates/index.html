@@ -100,6 +100,8 @@
     .badge-extrato  { background: #1e1b4b; color: #a5b4fc; }
     .badge-notif    { background: #1e293b; color: #94a3b8; }
     .badge-transf   { background: #0c4a6e; color: #7dd3fc; }
+    .badge-compra   { background: #1c1917; color: #fbbf24; }
+    .badge-venda    { background: #052e16; color: #86efac; }
     .badge-default  { background: #1e293b; color: #94a3b8; }
 
     .empresa { font-weight: 600; font-size: 0.8rem; }
@@ -193,6 +195,7 @@
       <!-- Abas -->
       <div class="tabs">
         <button class="tab-btn ativo" onclick="mudarAba('visao-geral', this)">Visão Geral</button>
+        <button class="tab-btn" onclick="mudarAba('investimentos', this)">Investimentos</button>
         <button class="tab-btn" onclick="mudarAba('resumo-ia', this)">Resumo IA</button>
       </div>
 
@@ -213,6 +216,10 @@
             <div class="value" id="c-saldo">—</div>
           </div>
           <div class="card amarelo">
+            <div class="label">Em Investimentos</div>
+            <div class="value" id="c-invest">—</div>
+          </div>
+          <div class="card amarelo" style="border-color:#334155">
             <div class="label">Transações</div>
             <div class="value" id="c-total">—</div>
           </div>
@@ -253,6 +260,55 @@
         </div>
       </div>
 
+      <!-- ABA: Investimentos -->
+      <div id="aba-investimentos" class="tab-panel">
+        <div class="cards">
+          <div class="card amarelo">
+            <div class="label">Total Comprado</div>
+            <div class="value" id="i-comprado">—</div>
+          </div>
+          <div class="card verde">
+            <div class="label">Total Vendido</div>
+            <div class="value" id="i-vendido">—</div>
+          </div>
+          <div class="card azul">
+            <div class="label">Saldo Líquido (compra − venda)</div>
+            <div class="value" id="i-liquido">—</div>
+          </div>
+          <div class="card" style="border-color:#7c3aed">
+            <div class="label">Último Snapshot Carteira</div>
+            <div class="value" id="i-snapshot" style="color:#a78bfa">—</div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-box" style="grid-column: 1 / -1">
+            <h2>Compras e Vendas de Ações</h2>
+            <canvas id="g-acoes"></canvas>
+          </div>
+        </div>
+
+        <div class="tabela-box">
+          <h2>Operações de Ações</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Empresa</th>
+                <th>Tipo</th>
+                <th>Ticker</th>
+                <th>Valor</th>
+                <th>Descrição</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-acoes"></tbody>
+          </table>
+          <p id="sem-acoes" style="color:#64748b;font-size:0.85rem;padding:24px 0;text-align:center;display:none">
+            Nenhuma operação de ações registrada ainda.
+          </p>
+        </div>
+      </div>
+
       <!-- ABA: Resumo IA -->
       <div id="aba-resumo-ia" class="tab-panel">
         <button id="btn-gerar-resumo" onclick="gerarResumoIA()">Gerar Resumo com Claude</button>
@@ -286,6 +342,9 @@
     }
 
     function badgeClass(tipo) {
+      const t = tipo?.toLowerCase() || '';
+      if (t.includes('compra')) return 'badge-compra';
+      if (t.includes('venda'))  return 'badge-venda';
       const m = {
         'entrada': 'badge-entrada',
         'saída': 'badge-saida', 'saida': 'badge-saida',
@@ -294,7 +353,7 @@
         'notificação': 'badge-notif', 'notificacao': 'badge-notif',
         'transferência': 'badge-transf', 'transferencia': 'badge-transf',
       };
-      return m[tipo?.toLowerCase()] || 'badge-default';
+      return m[t] || 'badge-default';
     }
 
     function criarOuAtualizar(id, tipo, data, opcoes = {}) {
@@ -327,13 +386,75 @@
       document.getElementById('sem-dados').style.display = 'none';
       document.getElementById('conteudo').style.display = 'block';
 
-      // Cards
+      // Cards gerais
       document.getElementById('c-entradas').textContent = fmt(d.total_entradas);
       document.getElementById('c-saidas').textContent   = fmt(d.total_saidas);
       const saldoEl = document.getElementById('c-saldo');
       saldoEl.textContent = fmt(d.saldo);
       saldoEl.style.color = d.saldo >= 0 ? '#4ade80' : '#f87171';
       document.getElementById('c-total').textContent = d.total_transacoes;
+
+      // Card investimentos (usa snapshot se disponível, senão saldo líquido)
+      const inv = d.investimentos || {};
+      const valorInvest = inv.ultimo_snapshot !== null ? inv.ultimo_snapshot : inv.saldo_liquido;
+      document.getElementById('c-invest').textContent = valorInvest != null ? fmt(valorInvest) : '—';
+
+      // Cards da aba Investimentos
+      document.getElementById('i-comprado').textContent  = fmt(inv.total_comprado  || 0);
+      document.getElementById('i-vendido').textContent   = fmt(inv.total_vendido   || 0);
+      document.getElementById('i-liquido').textContent   = fmt(inv.saldo_liquido   || 0);
+      document.getElementById('i-snapshot').textContent  = inv.ultimo_snapshot != null ? fmt(inv.ultimo_snapshot) : '—';
+
+      // Gráfico de ações (bar agrupado compra x venda por mês)
+      const opAcoes = inv.operacoes || [];
+      const mesesAcoes = {};
+      for (const op of opAcoes) {
+        const [d2, m2, y2] = op.data.split('/');
+        const chave = `${y2}-${m2}`;
+        if (!mesesAcoes[chave]) mesesAcoes[chave] = { compra: 0, venda: 0 };
+        if (op.tipo.includes('compra')) mesesAcoes[chave].compra += op.valor;
+        else mesesAcoes[chave].venda += op.valor;
+      }
+      const mesesAcoesKeys = Object.keys(mesesAcoes).sort();
+      const mesesAcoesFmt = mesesAcoesKeys.map(k => {
+        const [y, mo] = k.split('-');
+        return new Date(+y, +mo - 1).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+      });
+      criarOuAtualizar('g-acoes', 'bar', {
+        labels: mesesAcoesFmt.length ? mesesAcoesFmt : ['Sem dados'],
+        datasets: [
+          { label: 'Compras', data: mesesAcoesKeys.map(k => mesesAcoes[k].compra), backgroundColor: '#fbbf24', borderRadius: 4 },
+          { label: 'Vendas',  data: mesesAcoesKeys.map(k => mesesAcoes[k].venda),  backgroundColor: '#4ade80', borderRadius: 4 },
+        ]
+      }, {
+        scales: {
+          x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e2535' } },
+          y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e2535' } }
+        }
+      });
+
+      // Tabela de operações de ações
+      const tbodyAcoes = document.getElementById('tbody-acoes');
+      const semAcoes = document.getElementById('sem-acoes');
+      tbodyAcoes.innerHTML = '';
+      if (opAcoes.length === 0) {
+        semAcoes.style.display = 'block';
+      } else {
+        semAcoes.style.display = 'none';
+        for (const op of opAcoes) {
+          const tr = document.createElement('tr');
+          const isCompra = op.tipo.includes('compra');
+          tr.innerHTML = `
+            <td>${op.data}</td>
+            <td><span class="empresa">${op.empresa}</span></td>
+            <td><span class="badge ${badgeClass(op.tipo)}">${isCompra ? 'Compra' : 'Venda'}</span></td>
+            <td style="font-weight:600;color:#e2e8f0">${op.ticker || '—'}</td>
+            <td class="${isCompra ? 'valor-neg' : 'valor-pos'}">${fmt(op.valor, op.moeda)}</td>
+            <td class="descricao">${op.descricao || '—'}</td>
+          `;
+          tbodyAcoes.appendChild(tr);
+        }
+      }
 
       // Gráfico: por empresa (bar)
       const empLabels = Object.keys(d.por_empresa);
